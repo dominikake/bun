@@ -378,7 +378,7 @@ function ffiRunner(fast) {
         getDeallocatorBuffer,
       },
       close,
-    } = dlopen("/tmp/bun-ffi-test.dylib", types);
+    } = dlopen("/tmp/bun-ffi-test." + suffix, types);
     it("primitives", () => {
       Bun.gc(true);
       expect(returns_true()).toBe(true);
@@ -413,8 +413,19 @@ function ffiRunner(fast) {
       expect(identity_bool(false)).toBe(false);
       expect(identity_double(10.100000000000364)).toBe(10.100000000000364);
 
+      // Negative BigInt arguments to a double must preserve their sign (not be abs()ed).
+      expect(identity_double(-1234n)).toBe(-1234);
+      expect(identity_double(BigInt(-7007))).toBe(-7007);
+
       expect(identity_int8_t(10)).toBe(10);
       expect(identity_int16_t(10)).toBe(10);
+
+      // int16_t out-of-range arguments clamp to the valid [-32768, 32767] range.
+      expect(identity_int16_t(32767)).toBe(32767);
+      expect(identity_int16_t(32768)).toBe(32767);
+      expect(identity_int16_t(40000)).toBe(32767);
+      expect(identity_int16_t(-32768)).toBe(-32768);
+      expect(identity_int16_t(-32769)).toBe(-32768);
 
       if (fast) expect(identity_int64_t(10)).toBe(10);
       else expect(identity_int64_t(10)).toBe(10n);

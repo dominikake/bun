@@ -161,7 +161,7 @@ const ffiWrappers = new Array(21);
 var char = "val|0";
 ffiWrappers.fill(char);
 ffiWrappers[FFIType.uint8_t] = "val<0?0:val>=255?255:val|0";
-ffiWrappers[FFIType.int16_t] = "val<=-32768?-32768:val>=32768?32768:val|0";
+ffiWrappers[FFIType.int16_t] = "val<=-32768?-32768:val>=32767?32767:val|0";
 ffiWrappers[FFIType.uint16_t] = "val<=0?0:val>=65536?65536:val|0";
 ffiWrappers[FFIType.int32_t] = "val|0";
 // https://github.com/oven-sh/bun/issues/7007
@@ -258,7 +258,7 @@ ffiWrappers[FFIType.uint16_t] = `{
 ffiWrappers[FFIType.double] = `{
   if (typeof val === "bigint") {
     if (val.valueOf() < BigInt(Number.MAX_VALUE)) {
-      return Math.abs(Number(val).valueOf()) + (0.00 - 0.00);
+      return Number(val).valueOf() + (0.00 - 0.00);
     }
   }
 
