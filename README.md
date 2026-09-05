@@ -3,6 +3,12 @@
 </p>
 <h1 align="center">Bun</h1>
 
+> [!IMPORTANT]
+> **Fork note — `bun-zig`**: This repository is a **Zig-continuation fork** of [`oven-sh/bun`](https://github.com/oven-sh/bun).
+> - Default branch [`zig-legacy`](https://github.com/dominikake/bun/tree/zig-legacy) is pinned at `bun-v1.3.14` (`0d9b296`, 2026-05-12 — the last pure-Zig commit before the Rust rewrite) and continues development in Zig (`build.zig`, `src/*.zig` — 1299 Zig files, 0 Rust in `src/`).
+> - Branch [`upstream-rust`](https://github.com/dominikake/bun/tree/upstream-rust) is a mirror of `oven-sh/bun` `main` after the Rust rewrite (`23427dbc` #30412, 2026-05-14, 1531 Rust files). Its **67% Rust** language bar is expected and does **not** reflect the default branch.
+> - GitHub's language breakdown is **per-branch** (and cached). Viewing [`/tree/zig-legacy`](https://github.com/dominikake/bun/tree/zig-legacy) shows Zig as primary; [`/tree/upstream-rust`](https://github.com/dominikake/bun/tree/upstream-rust) shows Rust.
+
 <p align="center">
 <a href="https://bun.com/discord" target="_blank"><img height=20 src="https://img.shields.io/discord/876711213126520882" /></a>
 <img src="https://img.shields.io/github/stars/oven-sh/bun" alt="stars">
