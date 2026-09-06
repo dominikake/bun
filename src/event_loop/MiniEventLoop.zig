@@ -33,6 +33,10 @@ after_event_loop_callback: ?jsc.OpaqueCallback = null,
 pipe_read_buffer: ?*PipeReadBuffer = null,
 stdout_store: ?*bun.webcore.Blob.Store = null,
 stderr_store: ?*bun.webcore.Blob.Store = null,
+/// Deferred `KeepAlive.unref` count, drained on the next tick.
+/// Mirrors `VirtualMachine.pending_unref_counter` (see `src/jsc/VirtualMachine.zig`).
+/// Queued by `MiniVM.incrementPendingUnrefCounter` via `KeepAlive.unrefOnNextTick`.
+pending_unref_counter: i32 = 0,
 const PipeReadBuffer = [256 * 1024]u8;
 
 pub threadlocal var globalInitialized: bool = false;
@@ -150,12 +154,25 @@ pub fn tickConcurrentWithCount(this: *MiniEventLoop) usize {
     return this.tasks.count - start_count;
 }
 
+/// Drain deferred `KeepAlive.unref`s queued by `MiniVM.incrementPendingUnrefCounter`.
+/// Mirrors the drain in `jsc.EventLoop.tick` (see `src/jsc/event_loop.zig`).
+fn drainPendingUnrefCounter(this: *MiniEventLoop) void {
+    if (comptime Environment.isPosix) {
+        const pending_unref = this.pending_unref_counter;
+        if (pending_unref > 0) {
+            this.pending_unref_counter = 0;
+            this.loop.unrefCount(pending_unref);
+        }
+    }
+}
+
 pub fn tickOnce(
     this: *MiniEventLoop,
     context: *anyopaque,
 ) void {
     if (this.tickConcurrentWithCount() == 0 and this.tasks.count == 0) {
         defer this.onAfterEventLoop();
+        this.drainPendingUnrefCounter();
         this.loop.inc();
         this.loop.tick();
         this.loop.dec();
@@ -178,6 +195,7 @@ pub fn tickWithoutIdle(
             task.run(context);
         }
 
+        this.drainPendingUnrefCounter();
         this.loop.tickWithoutIdle();
 
         if (this.tasks.count == 0 and this.tickConcurrentWithCount() == 0) break;
@@ -192,6 +210,7 @@ pub fn tick(
     while (!isDone(context)) {
         if (this.tickConcurrentWithCount() == 0 and this.tasks.count == 0) {
             defer this.onAfterEventLoop();
+            this.drainPendingUnrefCounter();
             this.loop.inc();
             this.loop.tick();
             this.loop.dec();
@@ -354,8 +373,7 @@ pub const MiniVM = struct {
     }
 
     pub inline fn incrementPendingUnrefCounter(this: @This()) void {
-        _ = this;
-        @panic("FIXME TODO");
+        this.mini.pending_unref_counter +|= 1;
     }
 
     pub inline fn filePolls(this: @This()) *Async.FilePoll.Store {
@@ -411,3 +429,19 @@ const jsc = bun.jsc;
 const AnyTaskWithExtraContext = jsc.AnyTaskWithExtraContext;
 const EventLoop = jsc.EventLoop;
 const VirtualMachine = jsc.VirtualMachine;
+
+test "MiniVM.incrementPendingUnrefCounter defers unref instead of panicking" {
+    // Regression test for dominikake/bun#1: this used to `@panic("FIXME TODO")`.
+    // The loop pointer is left undefined: incrementing only touches the counter.
+    var mini: MiniEventLoop = .{
+        .tasks = Queue.init(std.testing.allocator),
+        .allocator = std.testing.allocator,
+        .loop = undefined,
+    };
+    defer mini.tasks.deinit();
+
+    const vm = MiniVM.init(&mini);
+    vm.incrementPendingUnrefCounter();
+    vm.incrementPendingUnrefCounter();
+    try std.testing.expectEqual(@as(i32, 2), mini.pending_unref_counter);
+}
