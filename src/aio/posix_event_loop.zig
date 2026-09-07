@@ -65,11 +65,20 @@ pub const KeepAlive = struct {
 
     /// Prevent a poll from keeping the process alive on the next tick.
     pub fn unrefOnNextTick(this: *KeepAlive, event_loop_ctx_: anytype) void {
+        if (comptime @TypeOf(event_loop_ctx_) == jsc.EventLoopHandle) {
+            if (this.status != .active)
+                return;
+            this.status = .inactive;
+            switch (event_loop_ctx_) {
+                .js => |loop| loop.virtual_machine.pending_unref_counter +|= 1,
+                .mini => |mini| mini.pending_unref_counter +|= 1,
+            }
+            return;
+        }
         const event_loop_ctx = jsc.AbstractVM(event_loop_ctx_);
         if (this.status != .active)
             return;
         this.status = .inactive;
-        // vm.pending_unref_counter +|= 1;
         event_loop_ctx.incrementPendingUnrefCounter();
     }
 

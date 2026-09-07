@@ -33,6 +33,10 @@ after_event_loop_callback: ?jsc.OpaqueCallback = null,
 pipe_read_buffer: ?*PipeReadBuffer = null,
 stdout_store: ?*bun.webcore.Blob.Store = null,
 stderr_store: ?*bun.webcore.Blob.Store = null,
+/// Deferred `KeepAlive.unref` count, drained on the next tick.
+/// Mirrors `VirtualMachine.pending_unref_counter` (see `src/jsc/VirtualMachine.zig`).
+/// Queued by `MiniVM.incrementPendingUnrefCounter` via `KeepAlive.unrefOnNextTick`.
+pending_unref_counter: i32 = 0,
 const PipeReadBuffer = [256 * 1024]u8;
 
 pub threadlocal var globalInitialized: bool = false;
@@ -150,10 +154,24 @@ pub fn tickConcurrentWithCount(this: *MiniEventLoop) usize {
     return this.tasks.count - start_count;
 }
 
+/// Drain deferred `KeepAlive.unref`s queued by `MiniVM.incrementPendingUnrefCounter`.
+/// Mirrors the drain in `jsc.EventLoop.tick` (see `src/jsc/event_loop.zig`).
+/// Must run on every tick, even when tasks are pending, or deferred unrefs starve.
+fn drainPendingUnrefCounter(this: *MiniEventLoop) void {
+    if (comptime Environment.isPosix) {
+        const pending_unref = this.pending_unref_counter;
+        if (pending_unref > 0) {
+            this.pending_unref_counter = 0;
+            this.loop.unrefCount(pending_unref);
+        }
+    }
+}
+
 pub fn tickOnce(
     this: *MiniEventLoop,
     context: *anyopaque,
 ) void {
+    this.drainPendingUnrefCounter();
     if (this.tickConcurrentWithCount() == 0 and this.tasks.count == 0) {
         defer this.onAfterEventLoop();
         this.loop.inc();
@@ -178,6 +196,7 @@ pub fn tickWithoutIdle(
             task.run(context);
         }
 
+        this.drainPendingUnrefCounter();
         this.loop.tickWithoutIdle();
 
         if (this.tasks.count == 0 and this.tickConcurrentWithCount() == 0) break;
@@ -190,6 +209,7 @@ pub fn tick(
     comptime isDone: *const fn (*anyopaque) bool,
 ) void {
     while (!isDone(context)) {
+        this.drainPendingUnrefCounter();
         if (this.tickConcurrentWithCount() == 0 and this.tasks.count == 0) {
             defer this.onAfterEventLoop();
             this.loop.inc();
@@ -354,8 +374,7 @@ pub const MiniVM = struct {
     }
 
     pub inline fn incrementPendingUnrefCounter(this: @This()) void {
-        _ = this;
-        @panic("FIXME TODO");
+        this.mini.pending_unref_counter +|= 1;
     }
 
     pub inline fn filePolls(this: @This()) *Async.FilePoll.Store {
@@ -411,3 +430,91 @@ const jsc = bun.jsc;
 const AnyTaskWithExtraContext = jsc.AnyTaskWithExtraContext;
 const EventLoop = jsc.EventLoop;
 const VirtualMachine = jsc.VirtualMachine;
+
+test "MiniVM.incrementPendingUnrefCounter defers unref instead of panicking" {
+    // Regression test for dominikake/bun#1: this used to `@panic("FIXME TODO")`.
+    // The loop pointer is left undefined: incrementing only touches the counter.
+    var mini: MiniEventLoop = .{
+        .tasks = Queue.init(std.testing.allocator),
+        .allocator = std.testing.allocator,
+        .loop = undefined,
+    };
+    defer mini.tasks.deinit();
+
+    const vm = MiniVM.init(&mini);
+    vm.incrementPendingUnrefCounter();
+    vm.incrementPendingUnrefCounter();
+    try std.testing.expectEqual(@as(i32, 2), mini.pending_unref_counter);
+}
+
+test "KeepAlive.unrefOnNextTick defers via MiniVM counter and is idempotent" {
+    // Covers the previously-panicking MiniVM branch through the real
+    // `KeepAlive` state machine instead of calling the counter directly.
+    // Uses a zeroed loop so `ref()`/`drainPendingUnrefCounter()` never
+    // touch the global uSockets loop.
+    if (comptime !Environment.isPosix) return error.SkipZigTest;
+
+    var fake_loop: uws.Loop = std.mem.zeroes(uws.Loop);
+    var mini: MiniEventLoop = .{
+        .tasks = Queue.init(std.testing.allocator),
+        .allocator = std.testing.allocator,
+        .loop = &fake_loop,
+    };
+    defer mini.tasks.deinit();
+
+    var keep_alive = Async.KeepAlive.init();
+    keep_alive.ref(&mini);
+    try std.testing.expect(keep_alive.isActive());
+    try std.testing.expectEqual(@as(i32, 1), fake_loop.num_polls);
+    try std.testing.expectEqual(@as(u32, 1), fake_loop.active);
+
+    // Deferred unref: counter grows, loop counters are untouched until drain.
+    keep_alive.unrefOnNextTick(&mini);
+    try std.testing.expect(!keep_alive.isActive());
+    try std.testing.expectEqual(@as(i32, 1), mini.pending_unref_counter);
+    try std.testing.expectEqual(@as(i32, 1), fake_loop.num_polls);
+    // Second call is a no-op: already inactive, counter must not grow.
+    keep_alive.unrefOnNextTick(&mini);
+    try std.testing.expectEqual(@as(i32, 1), mini.pending_unref_counter);
+
+    // Same deferred path via an EventLoopHandle wrapping the mini loop.
+    var keep_alive_handle = Async.KeepAlive.init();
+    keep_alive_handle.ref(jsc.EventLoopHandle{ .mini = &mini });
+    keep_alive_handle.unrefOnNextTick(jsc.EventLoopHandle{ .mini = &mini });
+    try std.testing.expectEqual(@as(i32, 2), mini.pending_unref_counter);
+    keep_alive_handle.unrefOnNextTick(jsc.EventLoopHandle{ .mini = &mini });
+    try std.testing.expectEqual(@as(i32, 2), mini.pending_unref_counter);
+
+    // Draining applies both deferred unrefs and resets the counter.
+    mini.drainPendingUnrefCounter();
+    try std.testing.expectEqual(@as(i32, 0), mini.pending_unref_counter);
+    try std.testing.expectEqual(@as(i32, 0), fake_loop.num_polls);
+    try std.testing.expectEqual(@as(u32, 0), fake_loop.active);
+}
+
+test "MiniEventLoop.drainPendingUnrefCounter applies unrefCount and resets" {
+    if (comptime !Environment.isPosix) return error.SkipZigTest;
+
+    var fake_loop: uws.Loop = std.mem.zeroes(uws.Loop);
+    fake_loop.num_polls = 10;
+    fake_loop.active = 5;
+
+    var mini: MiniEventLoop = .{
+        .tasks = Queue.init(std.testing.allocator),
+        .allocator = std.testing.allocator,
+        .loop = &fake_loop,
+    };
+    defer mini.tasks.deinit();
+
+    // Zero pending: loop counters must be untouched.
+    mini.drainPendingUnrefCounter();
+    try std.testing.expectEqual(@as(i32, 10), fake_loop.num_polls);
+    try std.testing.expectEqual(@as(u32, 5), fake_loop.active);
+
+    // Pending: applied once via unrefCount, then reset.
+    mini.pending_unref_counter = 2;
+    mini.drainPendingUnrefCounter();
+    try std.testing.expectEqual(@as(i32, 0), mini.pending_unref_counter);
+    try std.testing.expectEqual(@as(i32, 8), fake_loop.num_polls);
+    try std.testing.expectEqual(@as(u32, 3), fake_loop.active);
+}

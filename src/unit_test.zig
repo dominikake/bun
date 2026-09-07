@@ -1,6 +1,7 @@
 test {
     _ = @import("./shell_parser/braces.zig");
     _ = @import("./runtime/node/assert/myers_diff.zig");
+    _ = @import("./event_loop/MiniEventLoop.zig");
 }
 
 test "basic string usage" {
