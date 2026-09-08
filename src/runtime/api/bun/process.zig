@@ -1563,7 +1563,13 @@ pub fn spawnProcessPosix(
         const fileno = bun.FD.fromNative(@intCast(3 + i));
 
         switch (ipc) {
-            .dup2 => @panic("TODO dup2 extra fd"),
+            .dup2 => |dup2| {
+                try actions.dup2(dup2.to.toFd(), fileno);
+                // The source fd is owned by the caller. Record it so `stdio[N]`
+                // reflects the source, but mark it unowned so finalizeStreams
+                // leaves it open (same as the `.pipe` arm below).
+                try extra_fds.append(.{ .unowned_fd = dup2.to.toFd() });
+            },
             .inherit => {
                 try actions.inherit(fileno);
                 try extra_fds.append(.unavailable);
@@ -1813,7 +1819,13 @@ pub fn spawnProcessWindows(
         const flag = @as(u32, uv.O.RDWR);
 
         switch (ipc) {
-            .dup2 => @panic("TODO dup2 extra fd"),
+            .dup2 => |dup2| {
+                // Same mapping as the `.pipe` arm below: inherit the source fd
+                // into this stdio slot. (No uv pipe dance needed: unlike
+                // stdio[0..2] there is no cross-slot ordering hack here.)
+                stdio.flags = uv.StdioFlags.inherit_fd;
+                stdio.data.fd = dup2.to.toFd().uv();
+            },
             .inherit => {
                 stdio.flags = uv.StdioFlags.inherit_fd;
                 stdio.data.fd = @intCast(3 + i);
