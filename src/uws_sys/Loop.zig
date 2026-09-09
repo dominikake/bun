@@ -86,7 +86,7 @@ pub const PosixLoop = extern struct {
 
     pub fn unrefCount(this: *PosixLoop, count: i32) void {
         log("unref x {d}", .{count});
-        this.num_polls -= count;
+        this.num_polls -|= count;
         this.active -|= @as(u32, @intCast(count));
     }
 
