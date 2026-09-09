@@ -1097,7 +1097,7 @@ pub const PosixSpawnOptions = struct {
         buffer: void,
         ipc: void,
         pipe: bun.FD,
-        // TODO: remove this entry, it doesn't seem to be used
+        // Used by shell stderr/stdout redirection (Cmd.zig duplicate_out)
         dup2: struct { out: bun.jsc.Subprocess.StdioKind, to: bun.jsc.Subprocess.StdioKind },
     };
 
@@ -1564,10 +1564,10 @@ pub fn spawnProcessPosix(
 
         switch (ipc) {
             .dup2 => |dup2| {
+                // dup2.to is always a process standard stream (0/1/2) via StdioKind.
+                // Record it so stdio[N] reflects the source fd, but mark it
+                // unowned so finalizeStreams leaves it open.
                 try actions.dup2(dup2.to.toFd(), fileno);
-                // The source fd is owned by the caller. Record it so `stdio[N]`
-                // reflects the source, but mark it unowned so finalizeStreams
-                // leaves it open (same as the `.pipe` arm below).
                 try extra_fds.append(.{ .unowned_fd = dup2.to.toFd() });
             },
             .inherit => {
