@@ -236,6 +236,10 @@ pub const css = @import("./css/css_parser.zig");
 pub const SmallList = css.SmallList;
 pub const csrf = @import("./csrf/csrf.zig");
 pub const validators = @import("./runtime/node/util/validators.zig");
+/// Exposed so `zig build test` (`src/unit_test.zig`) can reference the diff
+/// tests through the shared `bun` module instead of a relative import, which
+/// would place this file in two modules (fixes dominikake/bun#54).
+pub const myers_diff = @import("./runtime/node/assert/myers_diff.zig");
 
 pub const shell = @import("./shell/shell.zig");
 pub const md = @import("./md/root.zig");

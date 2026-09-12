@@ -309,6 +309,16 @@ pub fn build(b: *Build) !void {
     {
         var step = b.step("test", "Build Bun's unit test suite");
         var o = build_options;
+        // Shared `@import("bun")` module, identical to the main object build.
+        // Both the test root (`src/unit_test.zig`) and the custom test runner
+        // (`src/main_test.zig`, which inherits the root module's imports)
+        // resolve `@import("bun")` to this single module, so every file under
+        // `src/` belongs to exactly one module (fixes dominikake/bun#54).
+        const bun = b.createModule(.{
+            .root_source_file = b.path("src/bun.zig"),
+        });
+        bun.addImport("bun", bun); // allow circular "bun" import
+        addInternalImports(b, bun, &o);
         var unit_tests = b.addTest(.{
             .name = "bun-test",
             .test_runner = .{ .path = b.path("src/main_test.zig"), .mode = .simple },
@@ -322,6 +332,7 @@ pub fn build(b: *Build) !void {
             .use_llvm = !build_options.no_llvm,
             .use_lld = if (build_options.os == .mac) false else !build_options.no_llvm,
         });
+        unit_tests.root_module.addImport("bun", bun);
         configureObj(b, &o, unit_tests);
         // Setting `linker_allow_shlib_undefined` causes the linker to ignore
         // all undefined symbols.  We want this because all we care about is the
@@ -336,8 +347,10 @@ pub fn build(b: *Build) !void {
         unit_tests.bundle_ubsan_rt = false;
 
         const bin = unit_tests.getEmittedBin();
-        const obj = bin.dirname().path(b, "bun-test.o");
-        const cpy_obj = b.addInstallFile(obj, "bun-test.o");
+        // NOTE: with `--no-link` (see `configureObj`) the test compile emits
+        // a relocatable object at the bin path itself (named `bun-test`, no
+        // `.o` suffix), so install it directly (fixes dominikake/bun#54).
+        const cpy_obj = b.addInstallFile(bin, "bun-test.o");
         step.dependOn(&cpy_obj.step);
     }
 
