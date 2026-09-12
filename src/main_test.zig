@@ -1,4 +1,4 @@
-pub const bun = @import("./bun.zig");
+pub const bun = @import("bun");
 
 const Output = bun.Output;
 const Environment = bun.Environment;
@@ -195,9 +195,12 @@ comptime {
 
     _ = bun.bun_js.Bun__onRejectEntryPointResult;
     _ = bun.bun_js.Bun__onResolveEntryPointResult;
-    _ = &@import("./runtime/node/buffer.zig").BufferVectorized;
-    @import("./cli/upgrade_command.zig").@"export"();
-    @import("./cli/test_command.zig").@"export"();
+    // NOTE: the symbol-retention references that used to live here
+    // (`&BufferVectorized`, `upgrade_command`/`test_command` `@"export"()`)
+    // were removed. They imported files relatively, which would place those
+    // files in two modules (dominikake/bun#54), and they only retain symbols
+    // for a linked binary — while this test step emits an unlinked object
+    // (`--no-link`). The main binary's retention is unchanged.
 }
 
 const builtin = @import("builtin");
